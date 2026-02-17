@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Local config / data
+.env
+.env.*
+!.env.example
+*.sqlite
+*.db
+/data/
+
+# OS / editors
+.DS_Store
+.vscode/
+.idea/
+
+# Logs
+*.log
