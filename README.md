@@ -1,4 +1,4 @@
-# YorkU VSB Seat Monitor
+# CourseNotif
 
 This repository is currently planning-only.
 
