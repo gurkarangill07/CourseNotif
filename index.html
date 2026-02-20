@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CourseNotif - Student Utility</title>
+    <style>
+        /* Simple, clean utility-focused CSS */
+        :root {
+            --primary-color: #2563eb;
+            --danger-color: #dc2626;
+            --bg-color: #f3f4f6;
+            --card-bg: #ffffff;
+            --text-color: #1f2937;
+            --border-color: #e5e7eb;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 500px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 1.5rem;
+        }
+
+        .card {
+            background: var(--card-bg);
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            border: 1px solid var(--border-color);
+        }
+
+        label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 8px;
+            font-size: 0.95rem;
+        }
+
+        input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-size: 1rem;
+            box-sizing: border-box; /* Ensures padding doesn't affect width */
+            margin-bottom: 10px;
+        }
+
+        button {
+            width: 100%;
+            padding: 10px;
+            background-color: var(--primary-color);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 1rem;
+            cursor: pointer;
+            font-weight: 500;
+        }
+
+        button:hover {
+            opacity: 0.9;
+        }
+
+        /* List Styles */
+        .course-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .course-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .course-item:last-child {
+            border-bottom: none;
+        }
+
+        .course-info strong {
+            display: block;
+            font-size: 1.1rem;
+        }
+
+        .course-info span {
+            font-size: 0.85rem;
+            color: #6b7280;
+        }
+
+        .stop-btn {
+            background-color: var(--danger-color);
+            width: auto; /* Override full width */
+            padding: 6px 12px;
+            font-size: 0.85rem;
+        }
+
+        .empty-state {
+            text-align: center;
+            color: #9ca3af;
+            font-style: italic;
+            padding: 10px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>CourseNotif</h1>
+
+        <!-- Section 1: Email Input -->
+        <div class="card">
+            <label for="email">1. Notification Email</label>
+            <input type="email" id="email">
+            <button onclick="setEmail()">Set Email Address</button>
+        </div>
+
+        <!-- Section 2: Add Course -->
+        <div class="card">
+            <label for="courseCode">2. Track a Course</label>
+            <input type="text" id="courseCode" placeholder="enter the rem enrollment code of your course">
+            <button onclick="startTracking()">Start Tracking</button>
+        </div>
+
+        <!-- Section 3: Tracked Courses List -->
+        <div class="card">
+            <label>Currently Tracked Courses</label>
+            <ul id="trackingList" class="course-list">
+                <li class="empty-state">No courses being tracked yet.</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        // Simple state management for the UI
+        let trackedCourses = [];
+        let notificationEmail = '';
+
+        function setEmail() {
+            const emailInput = document.getElementById('email');
+            const email = emailInput.value.trim();
+
+            if (!email || !email.includes('@') || !email.includes('.')) {
+                alert("Please enter a valid email address.");
+                emailInput.focus();
+                return;
+            }
+
+            notificationEmail = email;
+            alert(`Notification email has been set to: ${notificationEmail}`);
+        }
+
+        function startTracking() {
+            const courseInput = document.getElementById('courseCode');
+            const code = courseInput.value.trim().toUpperCase();
+
+            // Basic Validation
+            if (!notificationEmail) {
+                alert("Please set your email address first using the button above.");
+                document.getElementById('email').focus();
+                return;
+            }
+            if (!code) {
+                alert("Please enter a course code.");
+                courseInput.focus();
+                return;
+            }
+
+            // Prevent duplicates
+            if (trackedCourses.some(c => c.code === code)) {
+                alert("You are already tracking this course.");
+                return;
+            }
+
+            // Add to list
+            trackedCourses.push({
+                id: Date.now(),
+                code: code
+            });
+
+            // Clear course input but keep email
+            courseInput.value = '';
+            renderList();
+        }
+
+        function stopTracking(id) {
+            // Remove from list
+            trackedCourses = trackedCourses.filter(c => c.id !== id);
+            renderList();
+        }
+
+        function renderList() {
+            const list = document.getElementById('trackingList');
+            list.innerHTML = '';
+
+            if (trackedCourses.length === 0) {
+                list.innerHTML = '<li class="empty-state">No courses being tracked yet.</li>';
+                return;
+            }
+
+            trackedCourses.forEach(course => {
+                const li = document.createElement('li');
+                li.className = 'course-item';
+                li.innerHTML = `
+                    <div class="course-info">
+                        <strong>${course.code}</strong>
+                    </div>
+                    <button class="stop-btn" onclick="stopTracking(${course.id})">Stop Tracking</button>
+                `;
+                list.appendChild(li);
+            });
+        }
+
+        // Render initial list
+        renderList();
+    </script>
+</body>
+</html>
