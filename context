@@ -1,265 +1,110 @@
-# CourseNotif Context (Planning + Build Blueprint)
+# CourseNotif Context (Current Snapshot)
 
-Last updated: February 17, 2026
+Last updated: February 20, 2026
 
 ## 1) Project identity
 
 - Project name: CourseNotif
-- Current stage: Planning only
-- Code status: No implementation yet
-- Build status: Not started
-- Monitoring service: Not implemented
-
-## 2) Confirmed purpose (from repository docs)
-
-The repository currently exists to:
-
-- define product scope
-- finalize technical architecture
-- document rollout phases
-- capture risks and compliance constraints
-
-## 3) Product goal
-
-CourseNotif will monitor selected course/section/lab availability and notify users by email when a target changes to available.
-
-Confirmed inputs:
-
-- `course`
-- `section`
-- `lab key`
-- `email`
-
-Confirmed operational needs:
-
-- session-expiry + re-login workflow
-- deduplicated alerts
-- York policy/acceptable usage compliance
-
-## 4) What the app will do (major features)
-
-1. User onboarding and watch setup
-- User creates account and verifies email
-- User creates one or more watch targets with course, section, lab key, and term
-- User configures alert preferences
-
-2. Continuous monitoring
-- System checks target availability on a schedule
-- Checks are rate-limited and policy-aware
-- Each check is normalized into a consistent internal status format
-
-3. Event detection and dedupe
-- System detects transitions, especially `closed -> open`
-- System deduplicates repeated “open” events in a suppression window
-- System records every check result and transition event
-
-4. Notification delivery
-- Send email alerts when transition rules match
-- Retry transient email failures
-- Record send attempts and final delivery outcome
-
-5. Session lifecycle management
-- Detect expired or invalid upstream sessions
-- Pause affected monitor jobs
-- Trigger user re-login/reconnect flow
-- Resume monitoring automatically after successful reauth
-
-6. User visibility and control
-- Dashboard for watch status, last checked time, and last alert time
-- Pause/resume/delete watch targets
-- Show actionable errors (policy blocked, auth expired, parsing issue)
-
-7. Pilot + operations
-- Pilot cohort onboarding
-- Support process for expiry and false positives
-- Metric-driven iteration
-
-## 5) How we will build it (centralized MVP blueprint)
-
-1. Tech stack (proposed default)
-- Frontend + API: `Next.js` (TypeScript) on Node.js
-- Database: `PostgreSQL`
-- Queue: `Redis` + `BullMQ` (or equivalent job queue)
-- Worker runtime: Node.js worker service
-- Email provider: `Resend` or `SendGrid`
-- Hosting: `Vercel` (web) + background worker host (Railway/Fly/Render)
-- Observability: structured logs + error tracking (`Sentry`) + basic metrics
-
-2. Service components
-- `web`: dashboard, auth pages, watch CRUD
-- `api`: validation, auth, watch management, alert history APIs
-- `scheduler`: enqueues due watch checks at fixed interval
-- `monitor-worker`: executes checks, parses responses, emits events
-- `notify-worker`: sends email and handles retries
-
-3. High-level request and job flow
-- User creates watch via API
-- API stores watch and schedules first check
-- Scheduler periodically enqueues due checks
-- Monitor worker fetches source data and normalizes status
-- Worker compares against previous snapshot
-- If transition condition matches, worker creates alert event
-- Notify worker sends email and records delivery
-- Dashboard reads latest status and events from database
-
-4. Polling and latency model
-- Default poll interval: every 60-120 seconds per watch (policy-safe, configurable)
-- Global concurrency cap to avoid upstream overload
-- Target MVP alert latency objective: under 2 minutes for 95% of events
-
-## 6) Data model (MVP tables)
-
-1. `users`
-- `id`, `email`, `email_verified_at`, `created_at`, `updated_at`
-
-2. `watch_targets`
-- `id`, `user_id`, `term`, `course_code`, `section_code`, `lab_key`, `status`
-- `poll_interval_seconds`, `last_checked_at`, `last_known_state_hash`
-- `session_state` (`ok`, `expired`, `needs_reauth`), timestamps
-
-3. `check_runs`
-- `id`, `watch_target_id`, `started_at`, `ended_at`, `outcome`
-- `raw_payload_ref`, `normalized_state_json`, `error_code`, `error_message`
-
-4. `state_transitions`
-- `id`, `watch_target_id`, `from_state`, `to_state`, `detected_at`, `fingerprint`
-
-5. `alerts`
-- `id`, `watch_target_id`, `transition_id`, `channel`, `status`, `dedupe_key`
-- `created_at`, `sent_at`, `failure_reason`
-
-6. `alert_deliveries`
-- `id`, `alert_id`, `provider`, `provider_message_id`, `attempt`
-- `attempted_at`, `result`, `result_detail`
-
-7. `session_tokens` (only if required by integration approach)
-- `id`, `user_id`, `encrypted_token_blob`, `expires_at`, `last_validated_at`
-- strict encryption at rest and rotation policy
-
-## 7) Event and dedupe rules
-
-1. Event generation
-- Emit transition when normalized availability state changes
-- Primary actionable transition: `closed -> open`
-
-2. Dedupe strategy
-- Dedupe key: `user_id + watch_target_id + to_state + time_bucket`
-- Suppression window: 15 minutes by default
-- If repeated open state occurs in window, log but do not notify
-
-3. Idempotency
-- All workers use idempotency keys on writes and notification sends
-- Retries should not generate duplicate user-visible alerts
-
-## 8) Session-expiry and re-login workflow
-
-1. Detection
-- Worker classifies auth/session failures separately from transient network failures
-
-2. System response
-- Mark watch as `needs_reauth`
-- Pause active checks for that watch
-- Create user-facing task and optional reminder email
-
-3. Recovery
-- User completes re-login/reconnect flow
-- Token/session is revalidated
-- Watch returns to `ok` and re-enters scheduler
-
-## 9) Reliability, security, and policy controls
-
-1. Reliability targets (MVP)
-- Check job success rate: 99% daily excluding upstream outages
-- Queue backlog: stable under expected pilot load
-- Alert delivery success: 99% for accepted provider requests
-
-2. Security baseline
-- Encrypt sensitive credentials/tokens at rest
-- Enforce least-privilege DB and service credentials
-- Audit-log critical actions (watch create/delete, token update, alert sends)
-- Validate and sanitize all input fields
-
-3. Policy/compliance guardrails
-- Respect York policy boundaries for frequency and access method
-- Configurable minimum poll interval and per-user watch cap
-- Fast feature kill-switch if policy risk is identified
-
-## 10) API surface (MVP)
-
-1. Auth and account
-- `POST /api/auth/register`
-- `POST /api/auth/login`
-- `POST /api/auth/logout`
-- `POST /api/auth/verify-email`
-
-2. Watch management
-- `GET /api/watch-targets`
-- `POST /api/watch-targets`
-- `PATCH /api/watch-targets/:id`
-- `DELETE /api/watch-targets/:id`
-- `POST /api/watch-targets/:id/pause`
-- `POST /api/watch-targets/:id/resume`
-
-3. Status and history
-- `GET /api/watch-targets/:id/status`
-- `GET /api/watch-targets/:id/check-runs`
-- `GET /api/watch-targets/:id/alerts`
-
-4. Session recovery
-- `POST /api/session/reconnect`
-- `POST /api/session/validate`
-
-## 11) Rollout plan
-
-1. Phase A (spec freeze)
-- Finalize policy constraints, NFRs, and success metrics
-
-2. Phase B (core MVP)
-- Implement auth, watch CRUD, scheduler, monitor worker, email alerts
-- Ship internal admin logs and basic observability
-
-3. Phase C (pilot)
-- Onboard small cohort
-- Track false positives, missed alerts, reauth friction, latency
-- Iterate dedupe and error handling
-
-4. Phase D (hardening)
-- Improve reliability and rate-limit tuning
-- Add richer dashboard and operational tooling
-
-5. Phase E (long-term architecture)
-- Evaluate migration of monitoring execution to client-side extension/agent
-
-## 12) Known risks and mitigations
-
-1. Upstream schema/HTML changes break parsing
-- Mitigation: parser versioning, contract tests, fallback parser path
-
-2. Session churn degrades user trust
-- Mitigation: clear reauth UX, reminders, auto-resume after successful reauth
-
-3. Duplicate or stale alerts
-- Mitigation: transition-based alerts + dedupe keys + suppression windows
-
-4. Policy violations
-- Mitigation: conservative polling defaults, guardrails, kill-switch
-
-## 13) Open decisions that still need product input
-
-- Exact York policy interpretation for allowed monitoring frequency/method
-- Exact term/section/lab scope for v1
-- Final poll interval and per-user watch limits
-- Final email provider choice
-- Whether to store session tokens centrally for MVP or require lighter integration
-
-## 14) Instructions for other AIs using this context
-
-- Treat sections 2-3 as confirmed baseline
-- Treat sections 5-12 as current implementation blueprint
-- If proposing alternatives, preserve policy compliance and dedupe/session requirements
-- Prefer incremental improvements over architecture rewrites unless asked
-
-## 15) Source references used
-
-- `README.md`
-- `docs/ROADMAP.md`
+- Current stage: Implemented MVP (active development)
+- Repository state: Working backend + worker + UI in one Node.js app
+- Primary goal: Monitor tracked courses and notify users when open seats become available
+
+## 2) What is currently implemented
+
+1. Data model and persistence
+- PostgreSQL schema exists in `db/schema.sql`
+- Core tables: `users`, `courses`, `user_courses`, `shared_latest_jsp_file`, `shared_vsb_session`
+- DB access layer implemented in `src/db.js`
+
+2. API server
+- Express API in `src/apiServer.js`
+- Endpoints implemented:
+  - `GET /api/health`
+  - `POST /api/users/resolve`
+  - `GET /api/tracked-courses`
+  - `POST /api/tracked-courses`
+  - `DELETE /api/tracked-courses/:id`
+- `GET /` serves `index.html`
+
+3. Frontend
+- Single-page UI in `index.html`
+- Supports:
+  - set notification email
+  - add tracked course by cart ID
+  - list tracked courses
+  - stop tracking course
+- Frontend is connected to `/api/*` (not local-only storage for courses)
+
+4. Monitoring worker
+- Worker CLI in `src/worker.js`
+- Modes:
+  - `--init-login`
+  - `--once`
+  - default loop
+  - `--check-new-course <userId> <cartId>`
+- Core monitoring logic in `src/monitorService.js`
+- JSP parsing in `src/jspParser.js`
+
+5. VSB source integration
+- Source mode selector in `src/config.js`
+- Supported modes:
+  - `browser` (Playwright automation + capture in `src/vsbBrowserSource.js`)
+  - `filesystem`
+  - `db`
+- Browser mode supports shared login session init and response capture
+
+## 3) What is not done yet
+
+1. Notification delivery
+- Email sending is still stubbed in `src/notification.js` (console events only)
+- No real provider integration yet (Resend/SendGrid/etc.)
+
+2. Security and auth
+- No full auth/account system yet
+- Current API ownership model is email-based and lightweight
+
+3. Testing and hardening
+- No dedicated unit/integration test suite yet
+- Current check is syntax smoke only: `npm run smoke`
+
+4. Operational maturity
+- No production-grade observability stack yet (structured logs/metrics/alerting)
+- No formal retry/backoff policy for notification delivery failures yet
+
+## 4) Current runbook
+
+1. Install dependencies
+- `npm install`
+- `npx playwright install chromium`
+
+2. Configure env vars (minimum)
+- `DATABASE_URL` is required
+- For browser mode: `VSB_SOURCE_MODE=browser`, `VSB_URL`, selectors as needed
+
+3. Apply schema
+- `psql "$DATABASE_URL" -f db/schema.sql`
+
+4. Start app
+- `npm run web`
+- Open `http://localhost:3000`
+
+5. Initialize shared browser session (browser mode)
+- `npm run monitor:init-login`
+
+6. Run monitor
+- Single pass: `npm run monitor:once`
+- Continuous: `npm run monitor:loop`
+
+## 5) Immediate priorities
+
+1. Replace email stubs with real provider integration and delivery logging
+2. Add test coverage for parser, monitor logic, and API routes
+3. Improve auth/access control for tracked-course operations
+4. Harden session lifecycle behavior and failure recovery
+5. Add basic production observability and operational safeguards
+
+## 6) Notes for future contributors/agents
+
+- Treat this file as the source of truth for current implementation status.
+- `docs/ROADMAP.md` can still guide medium-term planning, but implementation has already started.
+- Keep docs aligned with code after each major change.
