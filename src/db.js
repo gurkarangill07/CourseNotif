@@ -9,6 +9,15 @@ function createDb({ databaseUrl }) {
     await pool.end();
   }
 
+  async function ensureCompatibility() {
+    await pool.query(
+      `
+      ALTER TABLE user_courses
+      ADD COLUMN IF NOT EXISTS display_name TEXT
+      `
+    );
+  }
+
   async function getSharedSession() {
     const { rows } = await pool.query(
       `
@@ -102,8 +111,10 @@ function createDb({ databaseUrl }) {
       SELECT
         uc.id AS user_course_id,
         uc.user_id,
+        uc.created_at,
         u.email,
         uc.cart_id,
+        uc.display_name,
         c.course_name,
         c.os
       FROM user_courses uc
@@ -152,8 +163,10 @@ function createDb({ databaseUrl }) {
       SELECT
         uc.id AS user_course_id,
         uc.user_id,
+        uc.created_at,
         u.email,
         uc.cart_id,
+        uc.display_name,
         c.course_name,
         c.os
       FROM user_courses uc
@@ -174,6 +187,7 @@ function createDb({ databaseUrl }) {
         uc.id AS user_course_id,
         uc.user_id,
         uc.cart_id,
+        uc.display_name,
         uc.created_at,
         c.course_name,
         c.os
@@ -221,7 +235,11 @@ function createDb({ databaseUrl }) {
       VALUES ($1, $2, $3, NOW(), NOW())
       ON CONFLICT (cart_id) DO UPDATE
       SET
-        course_name = EXCLUDED.course_name,
+        course_name = CASE
+          WHEN EXCLUDED.course_name IS NULL OR TRIM(EXCLUDED.course_name) = ''
+          THEN courses.course_name
+          ELSE EXCLUDED.course_name
+        END,
         os = EXCLUDED.os,
         updated_at = NOW()
       `,
@@ -229,7 +247,11 @@ function createDb({ databaseUrl }) {
     );
   }
 
-  async function ensureCourseExists(cartId) {
+  async function ensureCourseExists(cartId, courseName = null) {
+    const normalizedName =
+      typeof courseName === "string" && courseName.trim()
+        ? courseName.trim()
+        : null;
     await pool.query(
       `
       INSERT INTO courses (
@@ -239,10 +261,54 @@ function createDb({ databaseUrl }) {
         created_at,
         updated_at
       )
-      VALUES ($1, $1, 0, NOW(), NOW())
-      ON CONFLICT (cart_id) DO NOTHING
+      VALUES ($1, COALESCE($2, $1), 0, NOW(), NOW())
+      ON CONFLICT (cart_id) DO UPDATE
+      SET
+        course_name = CASE
+          WHEN courses.course_name IS NULL OR TRIM(courses.course_name) = ''
+          THEN COALESCE($2, courses.cart_id)
+          ELSE courses.course_name
+        END,
+        updated_at = NOW()
       `,
-      [cartId]
+      [cartId, normalizedName]
+    );
+  }
+
+  async function setUserCourseDisplayName({ userId, cartId, displayName }) {
+    const normalizedDisplayName =
+      typeof displayName === "string" && displayName.trim()
+        ? displayName.trim()
+        : null;
+
+    await pool.query(
+      `
+      UPDATE user_courses
+      SET display_name = $3
+      WHERE user_id = $1 AND cart_id = $2
+      `,
+      [userId, cartId, normalizedDisplayName]
+    );
+  }
+
+  async function setCourseDisplayName({ cartId, courseName }) {
+    const normalizedName =
+      typeof courseName === "string" && courseName.trim()
+        ? courseName.trim()
+        : null;
+    if (!normalizedName) {
+      return;
+    }
+
+    await pool.query(
+      `
+      UPDATE courses
+      SET
+        course_name = $2,
+        updated_at = NOW()
+      WHERE cart_id = $1
+      `,
+      [cartId, normalizedName]
     );
   }
 
@@ -303,19 +369,25 @@ function createDb({ databaseUrl }) {
     );
   }
 
-  async function trackCourseForUser({ userId, cartId }) {
+  async function trackCourseForUser({ userId, cartId, displayName = null }) {
+    const normalizedDisplayName =
+      typeof displayName === "string" && displayName.trim()
+        ? displayName.trim()
+        : null;
+
     const { rows } = await pool.query(
       `
       INSERT INTO user_courses (
         user_id,
         cart_id,
+        display_name,
         created_at
       )
-      VALUES ($1, $2, NOW())
+      VALUES ($1, $2, $3, NOW())
       ON CONFLICT (user_id, cart_id) DO NOTHING
       RETURNING id
       `,
-      [userId, cartId]
+      [userId, cartId, normalizedDisplayName]
     );
 
     return rows[0] || null;
@@ -323,6 +395,7 @@ function createDb({ databaseUrl }) {
 
   return {
     close,
+    ensureCompatibility,
     getSharedSession,
     markSharedSessionExpired,
     markSharedSessionOk,
@@ -334,6 +407,8 @@ function createDb({ databaseUrl }) {
     stopTrackingUserCourse,
     stopTrackingUserCourseForUser,
     ensureCourseExists,
+    setUserCourseDisplayName,
+    setCourseDisplayName,
     upsertCourseFromJsp,
     getSharedLatestJspFile,
     saveSharedLatestJspFile,

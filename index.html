@@ -140,6 +140,7 @@
         <div class="card">
             <label for="courseCode">2. Track a Course</label>
             <input type="text" id="courseCode" placeholder="enter the rem enrollment code of your course">
+            <input type="text" id="courseName" placeholder="optional course name (e.g., EECS 1012)">
             <button onclick="startTracking()">Start Tracking</button>
         </div>
 
@@ -222,7 +223,9 @@
 
         async function startTracking() {
             const courseInput = document.getElementById('courseCode');
+            const courseNameInput = document.getElementById('courseName');
             const code = courseInput.value.trim().toUpperCase();
+            const customCourseName = courseNameInput.value.trim();
 
             if (!notificationEmail) {
                 alert("Please set your email address first using the button above.");
@@ -236,14 +239,23 @@
             }
 
             try {
+                const payload = {
+                    email: notificationEmail,
+                    cartId: code
+                };
+                if (customCourseName) {
+                    payload.courseName = customCourseName;
+                }
+
                 const result = await apiRequest('/api/tracked-courses', {
                     method: 'POST',
-                    body: JSON.stringify({ email: notificationEmail, cartId: code })
+                    body: JSON.stringify(payload)
                 });
                 if (!result.created) {
                     alert("You are already tracking this course.");
                 }
                 courseInput.value = '';
+                courseNameInput.value = '';
                 await loadTrackedCourses();
             } catch (error) {
                 alert(error.message);
@@ -279,8 +291,7 @@
                 li.className = 'course-item';
                 li.innerHTML = `
                     <div class="course-info">
-                        <strong>${escapeHtml(course.cartId)}</strong>
-                        <span>${escapeHtml(course.courseName)} · OS: ${escapeHtml(course.os)}</span>
+                        <strong>${escapeHtml(course.courseName || course.cartId)}</strong>
                     </div>
                     <button class="stop-btn" onclick="stopTracking(${course.id})">Stop Tracking</button>
                 `;

@@ -64,6 +64,13 @@ function createDbOrFilesystemSource(db, config) {
       throw new Error(
         "initLoginSession is only available when VSB_SOURCE_MODE=browser."
       );
+    },
+
+    async tryAutoRelogin() {
+      return {
+        ok: false,
+        reason: "auto relogin is only available when VSB_SOURCE_MODE=browser"
+      };
     }
   };
 }

@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS user_courses (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   cart_id TEXT NOT NULL REFERENCES courses(cart_id) ON DELETE CASCADE,
+  display_name TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT user_courses_user_id_cart_id_unique UNIQUE (user_id, cart_id)
 );
@@ -73,6 +74,10 @@ ALTER TABLE shared_vsb_session
     (session_state = 'ok' AND encrypted_session_blob IS NOT NULL) OR
     (session_state <> 'ok')
   );
+
+-- Migration guard for newer user course naming behavior:
+ALTER TABLE user_courses
+  ADD COLUMN IF NOT EXISTS display_name TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_user_courses_user_id ON user_courses(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_courses_cart_id ON user_courses(cart_id);

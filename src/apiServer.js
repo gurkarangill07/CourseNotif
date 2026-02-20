@@ -19,11 +19,19 @@ function normalizeCartId(value) {
   return cartId;
 }
 
+function normalizeCourseName(value) {
+  const courseName = String(value || "").trim();
+  if (!courseName) {
+    return null;
+  }
+  return courseName;
+}
+
 function mapTrackedCourseRow(row) {
   return {
     id: row.user_course_id,
     cartId: row.cart_id,
-    courseName: row.course_name || row.cart_id,
+    courseName: row.display_name || row.course_name || row.cart_id,
     os: Number.isFinite(Number(row.os)) ? Number(row.os) : 0,
     createdAt: row.created_at
   };
@@ -32,6 +40,7 @@ function mapTrackedCourseRow(row) {
 async function main() {
   const config = loadConfig();
   const db = createDb({ databaseUrl: config.databaseUrl });
+  await db.ensureCompatibility();
   const app = express();
   const port = Number.parseInt(process.env.PORT || "3000", 10);
 
@@ -83,6 +92,7 @@ async function main() {
     try {
       const email = normalizeEmail(req.body && req.body.email);
       const cartId = normalizeCartId(req.body && req.body.cartId);
+      const courseName = normalizeCourseName(req.body && req.body.courseName);
       if (!email) {
         return res.status(400).json({ error: "Valid email is required." });
       }
@@ -93,19 +103,31 @@ async function main() {
       const user = await db.getOrCreateUserByEmail(email);
       const existing = await db.getTrackedCourseByUserAndCart(user.id, cartId);
       if (existing) {
+        if (courseName) {
+          await db.setUserCourseDisplayName({
+            userId: user.id,
+            cartId,
+            displayName: courseName
+          });
+        }
+        const refreshed = await db.getTrackedCourseByUserAndCart(user.id, cartId);
         return res.status(200).json({
           created: false,
           item: {
-            id: existing.user_course_id,
-            cartId: existing.cart_id,
-            courseName: existing.course_name || existing.cart_id,
-            os: Number.isFinite(Number(existing.os)) ? Number(existing.os) : 0
+            id: refreshed.user_course_id,
+            cartId: refreshed.cart_id,
+            courseName: refreshed.display_name || refreshed.course_name || refreshed.cart_id,
+            os: Number.isFinite(Number(refreshed.os)) ? Number(refreshed.os) : 0
           }
         });
       }
 
       await db.ensureCourseExists(cartId);
-      await db.trackCourseForUser({ userId: user.id, cartId });
+      await db.trackCourseForUser({
+        userId: user.id,
+        cartId,
+        displayName: courseName || null
+      });
       const tracked = await db.getTrackedCourseByUserAndCart(user.id, cartId);
 
       return res.status(201).json({
@@ -113,7 +135,7 @@ async function main() {
         item: {
           id: tracked.user_course_id,
           cartId: tracked.cart_id,
-          courseName: tracked.course_name || tracked.cart_id,
+          courseName: tracked.display_name || tracked.course_name || tracked.cart_id,
           os: Number.isFinite(Number(tracked.os)) ? Number(tracked.os) : 0
         }
       });

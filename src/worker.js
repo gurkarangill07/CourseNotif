@@ -48,6 +48,7 @@ function parseCliArgs(argv) {
 async function run() {
   const config = loadConfig();
   const db = createDb({ databaseUrl: config.databaseUrl });
+  await db.ensureCompatibility();
   const vsbSource = createVsbSource(db, config);
   const args = parseCliArgs(process.argv.slice(2));
 

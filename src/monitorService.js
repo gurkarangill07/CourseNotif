@@ -36,6 +36,28 @@ async function processTrackedCourse({
   notifier,
   forceRefresh = false
 }) {
+  function toTimestamp(input) {
+    if (!input) {
+      return 0;
+    }
+    const ts = new Date(input).getTime();
+    return Number.isFinite(ts) ? ts : 0;
+  }
+
+  let shouldForceRefresh = forceRefresh;
+  if (!shouldForceRefresh) {
+    const latestStored = await db.getSharedLatestJspFile();
+    const trackedCreatedAtTs = toTimestamp(target.created_at);
+    const latestGeneratedTs = toTimestamp(
+      latestStored && (latestStored.generated_at || latestStored.updated_at)
+    );
+
+    // New tracked course added after last JSP capture: force one live browser refresh now.
+    if (trackedCreatedAtTs > 0 && trackedCreatedAtTs > latestGeneratedTs) {
+      shouldForceRefresh = true;
+    }
+  }
+
   async function loadLatestFile({ refreshNow }) {
     const candidates = await vsbSource.collectGetClassDataCandidates({
       cartId: target.cart_id,
@@ -49,12 +71,12 @@ async function processTrackedCourse({
     return latestFile;
   }
 
-  let latestFile = await loadLatestFile({ refreshNow: forceRefresh });
+  let latestFile = await loadLatestFile({ refreshNow: shouldForceRefresh });
   let parsed;
   try {
     parsed = parseCourseFromJsp(latestFile.jspBody, target.cart_id);
   } catch (error) {
-    if (forceRefresh) {
+    if (shouldForceRefresh) {
       throw error;
     }
     latestFile = await loadLatestFile({ refreshNow: true });
@@ -100,16 +122,37 @@ async function monitorOnce({
     session.session_expires_at &&
     new Date(session.session_expires_at).getTime() <= Date.now();
 
+  let recoveredByAutoRelogin = false;
   if (!session || session.session_state !== "ok" || isClockExpired) {
-    await notifySessionFailureIfNeeded({
-      db,
-      notifier,
-      ownerAlertEmail,
-      reason: isClockExpired
-        ? "Shared VSB session timed out by expiry timestamp."
-        : "Shared VSB session is not active."
-    });
-    return summary;
+    if (typeof vsbSource.tryAutoRelogin === "function") {
+      try {
+        const relogin = await vsbSource.tryAutoRelogin({
+          reason: isClockExpired
+            ? "session_clock_expired"
+            : "session_state_not_ok"
+        });
+        if (relogin && relogin.ok) {
+          recoveredByAutoRelogin = true;
+          console.log("[monitor] Auto re-login restored session.");
+        } else if (relogin && relogin.reason) {
+          console.log(`[monitor] Auto re-login skipped/failed: ${relogin.reason}`);
+        }
+      } catch (error) {
+        console.log(`[monitor] Auto re-login error: ${error.message}`);
+      }
+    }
+
+    if (!recoveredByAutoRelogin) {
+      await notifySessionFailureIfNeeded({
+        db,
+        notifier,
+        ownerAlertEmail,
+        reason: isClockExpired
+          ? "Shared VSB session timed out by expiry timestamp."
+          : "Shared VSB session is not active."
+      });
+      return summary;
+    }
   }
 
   const trackedCourses = await db.listTrackedCourses();
@@ -130,6 +173,31 @@ async function monitorOnce({
     } catch (error) {
       summary.failures += 1;
       if (isSessionFailure(error)) {
+        if (typeof vsbSource.tryAutoRelogin === "function") {
+          try {
+            const relogin = await vsbSource.tryAutoRelogin({
+              reason: "mid_scan_session_failure"
+            });
+            if (relogin && relogin.ok) {
+              console.log("[monitor] Auto re-login succeeded after mid-scan session failure.");
+              const retryResult = await processTrackedCourse({
+                target,
+                db,
+                vsbSource,
+                notifier,
+                forceRefresh: true
+              });
+              if (retryResult.status === "notified_and_stopped") {
+                summary.notified += 1;
+                summary.stopped += 1;
+              }
+              continue;
+            }
+          } catch (reloginError) {
+            console.log(`[monitor] Auto re-login after mid-scan failure errored: ${reloginError.message}`);
+          }
+        }
+
         await notifySessionFailureIfNeeded({
           db,
           notifier,
@@ -171,6 +239,26 @@ async function runImmediateCheckForNewCourse({
     return result;
   } catch (error) {
     if (isSessionFailure(error)) {
+      if (typeof vsbSource.tryAutoRelogin === "function") {
+        try {
+          const relogin = await vsbSource.tryAutoRelogin({
+            reason: "immediate_check_session_failure"
+          });
+          if (relogin && relogin.ok) {
+            const retryResult = await processTrackedCourse({
+              target,
+              db,
+              vsbSource,
+              notifier,
+              forceRefresh: true
+            });
+            return retryResult;
+          }
+        } catch (reloginError) {
+          console.log(`[monitor] Auto re-login during immediate check failed: ${reloginError.message}`);
+        }
+      }
+
       await notifySessionFailureIfNeeded({
         db,
         notifier,

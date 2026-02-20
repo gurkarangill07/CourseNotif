@@ -51,7 +51,23 @@ export VSB_USER_DATA_DIR=".data/vsb-profile"
 export VSB_HEADLESS="false"                # keep false initially for login visibility
 export VSB_SEARCH_SELECTOR="input[type='search']"
 export VSB_DROPDOWN_OPTION_SELECTOR="[role='option']"
+export VSB_COURSE_ROW_SELECTOR="tr, li, .course, .course-row"
+export VSB_COURSE_PRESENCE_SELECTOR="tr, li, .course, .course-row"
+export VSB_COURSE_CHECKBOX_SELECTOR="input[type='checkbox'], [role='checkbox']"
+export VSB_CHECKBOX_TIMEOUT_MS="6000"
+export VSB_SYNC_TRACKED_COURSES_ON_START="true"
+export VSB_SYNC_TRACKED_COURSES_LIMIT="50"
 export VSB_LOGGED_OUT_SELECTOR="input[type='password']"
+
+# Optional auto re-login (recommended if VSB session expires frequently)
+export VSB_AUTO_RELOGIN_ENABLED="true"
+export VSB_LOGIN_USERNAME="your_student_username_or_email"
+export VSB_LOGIN_PASSWORD="your_password"
+export VSB_LOGIN_USERNAME_SELECTOR="input[type='email'], input[name='username'], input[name='user']"
+export VSB_LOGIN_PASSWORD_SELECTOR="input[type='password']"
+export VSB_LOGIN_SUBMIT_SELECTOR="button[type='submit'], input[type='submit']"
+export VSB_LOGIN_CONTINUE_SELECTOR="a[href*='schedulebuilder.yorku.ca/vsb/'], a:has-text('Visual Schedule Builder')"
+export VSB_POST_LOGIN_WAIT_MS="1500"
 
 # Optional fallback modes
 export JSP_SOURCE_DIR="/absolute/path/to/jsp/files" # used only when VSB_SOURCE_MODE=filesystem
@@ -107,6 +123,8 @@ node src/worker.js --check-new-course <userId> <cartId>
 
 - Browser mode is designed for "login once, keep worker running in background."
 - You do not need your personal VSB tab open, but the automation process must stay running and machine must stay awake/online.
-- When session expires, you must run `npm run monitor:init-login` again.
+- When session expires, worker can auto re-login if `VSB_AUTO_RELOGIN_ENABLED=true` and login credentials/selectors are configured.
 - Browser mode refresh rule: if a fresh JSP was captured within the last 15 minutes, worker reuses it; otherwise it forces a new VSB refresh and captures latest JSP.
 - UI tracking actions now persist to PostgreSQL through `/api/*` endpoints (no local-only list anymore).
+- Custom course names entered in UI are stored per tracked user-course (`user_courses.display_name`), not globally per cart id.
+- If browser refresh capture fails, worker only falls back to cached JSP when that cache is still within the configured refresh window.
