@@ -2,96 +2,107 @@
 
 Last updated: February 20, 2026
 
+Planning note: keep this file aligned with `README.md` and `context` after major implementation changes.
+
 ## Current baseline (already done)
 
-- PostgreSQL schema and DB layer are implemented.
-- Express API exists for user resolve and tracked-course CRUD.
-- Web UI exists and is connected to `/api/*`.
-- Monitoring worker exists with `--init-login`, `--once`, loop mode, and immediate check mode.
-- VSB source modes exist (`browser`, `filesystem`, `db`) with Playwright capture path.
-- JSP parser and monitor flow update course state and stop tracking after open-seat notification trigger.
+- PostgreSQL schema and DB layer are implemented (`db/schema.sql`, `src/db.js`).
+- Express API exists for user resolve and tracked-course CRUD (`src/apiServer.js`).
+- Web UI exists and is connected to `/api/*` (`index.html`).
+- Monitoring worker exists with `--init-login`, `--once`, loop mode, and immediate check mode (`src/worker.js`).
+- VSB source modes exist (`browser`, `filesystem`, `db`) via `src/vsbSource.js`.
+- Browser mode includes:
+  - live `getClassData.jsp` capture
+  - tracked-course sync into VSB
+  - cached JSP reuse within refresh window
+  - auto re-login fallback flow
+  - Playwright browser-context auto recovery when context/page closes
+- Local env runners exist (`web:local`, `monitor:*:local`) through `scripts/with-env.sh`.
+- Background worker ops scripts exist:
+  - supervisor loop (`scripts/start-monitor-supervisor.sh`, `scripts/stop-monitor-supervisor.sh`)
+  - macOS launchd install/uninstall helpers
 - Notification functions are present but currently stubbed (console events only).
 
-## Phase 1: Real notifications and reliability
+## Phase 1: Real notifications and delivery reliability
 
 Goal: move from stub alerts to reliable user-visible delivery.
 
-- Integrate real email provider (Resend or SendGrid).
-- Store notification attempts and outcomes.
+- Integrate a real email provider (Resend/SendGrid/etc.).
+- Persist delivery attempts and outcomes in DB.
 - Add retry/backoff for transient send failures.
-- Add idempotency guard to avoid duplicate sends for the same event.
-- Define alert suppression/dedupe window and enforce it in code.
+- Add idempotency guard for open-seat events.
+- Add dedupe/suppression window policy.
 
 Exit criteria:
-- Real emails send successfully in end-to-end tests.
-- Failed sends are retried and logged with clear status.
-- No duplicate emails for one open-seat event.
+- End-to-end open-seat flow sends real emails.
+- Failed sends are retried and recorded with final status.
+- Duplicate notifications for one event are prevented.
 
-## Phase 2: Security and access control
+## Phase 2: Auth and access control
 
 Goal: prevent unauthorized read/write of tracking data.
 
-- Add account auth (session or token based).
-- Bind tracked-course operations to authenticated user identity.
-- Remove dependency on query/body email for ownership checks.
-- Add basic rate limiting and input hardening on API endpoints.
-- Add environment and secret management checklist for deployment.
+- Add account authentication (session or token).
+- Bind tracked-course operations to authenticated identity.
+- Remove dependency on email query/body ownership checks.
+- Add route-level rate limiting and stricter input validation.
+- Add deployment checklist for secret management.
 
 Exit criteria:
 - Only authenticated users can manage their own tracked courses.
-- Unauthorized access attempts are blocked and logged.
+- Unauthorized requests are blocked and auditable.
 
-## Phase 3: Testing and quality gates
+## Phase 3: Tests and CI quality gates
 
-Goal: reduce regressions and increase deployment confidence.
+Goal: reduce regressions and raise deploy confidence.
 
-- Add unit tests for `jspParser` edge cases.
-- Add unit tests for `monitorService` success/failure/session-expiry paths.
+- Add unit tests for `src/jspParser.js` payload variants.
+- Add unit tests for `src/monitorService.js` session/error/notify paths.
 - Add integration tests for API routes (`resolve`, list/add/delete tracking).
-- Add CI checks for tests plus syntax/static checks.
-- Add fixtures for representative `getClassData.jsp` payload variants.
+- Add fixtures for representative `getClassData.jsp` responses.
+- Add CI checks for tests + syntax/static validation.
 
 Exit criteria:
-- Core parser, monitor, and API paths are covered by automated tests.
-- CI blocks merges when checks fail.
+- Parser, monitor, and API core paths are covered by automated tests.
+- CI blocks merges on failing checks.
 
-## Phase 4: Observability and operations
+## Phase 4: Observability and operations hardening
 
-Goal: make production behavior visible and supportable.
+Goal: make runtime behavior visible and recoverable.
 
-- Add structured logging for worker and API.
-- Add metrics for scan count, failures, notify count, and latency.
-- Add alerts for session-expired state and repeated worker failures.
-- Create runbooks for login refresh, provider failure, and DB connectivity issues.
-- Add graceful startup/shutdown checks and health reporting for worker process.
+- Add structured logging for API and worker.
+- Add metrics for scan counts, failures, notifications, and latencies.
+- Add alerts for repeated worker crashes/session-expired loops.
+- Add runbooks for VSB session recovery, provider outage, and DB connectivity failure.
+- Add worker health checks for supervisor/launchd workflows.
 
 Exit criteria:
-- Operators can detect and diagnose failures quickly.
-- Common incidents have documented recovery steps.
+- Operators can detect, diagnose, and recover common failures quickly.
+- On-call recovery steps are documented and tested.
 
-## Phase 5: Product and UX improvements
+## Phase 5: Product/UX improvements
 
-Goal: improve usability and reduce manual support overhead.
+Goal: improve user trust and self-serve troubleshooting.
 
-- Add clearer UI status for each tracked course (last check, latest OS, alert state).
+- Show per-course status (last checked time, latest `os`, alert state).
 - Add pause/resume tracking controls.
-- Add user-visible error states for session/auth problems.
-- Add optional immediate recheck button in UI after adding a course.
-- Improve validation and feedback for course/cart ID entry.
+- Add clearer UI errors for session/auth failures.
+- Add optional immediate recheck action from UI.
+- Improve cart ID validation and feedback.
 
 Exit criteria:
-- Users can self-serve most common tracking and recovery actions from UI.
+- Users can manage common tracking and recovery tasks from UI without manual support.
 
-## Parallel policy/compliance track
+## Parallel compliance/policy track
 
-- Confirm acceptable monitoring frequency and access method constraints.
-- Enforce minimum poll interval guardrails in config/runtime.
-- Add feature kill-switch for emergency disable.
-- Document compliance assumptions and review cadence.
+- Confirm acceptable monitoring cadence and access constraints.
+- Enforce minimum poll interval guardrails.
+- Add emergency feature kill switch.
+- Document compliance assumptions and periodic review process.
 
 ## Immediate next actions (recommended order)
 
 1. Implement real email provider integration with delivery logging.
 2. Add parser + monitor + API automated tests.
-3. Introduce authentication and ownership enforcement.
-4. Add observability baseline (structured logs + key metrics).
+3. Introduce authentication and identity-bound ownership checks.
+4. Add structured logs/metrics and operational alerts/runbooks.

@@ -6,70 +6,96 @@ Last updated: February 20, 2026
 
 - Project name: CourseNotif
 - Current stage: Implemented MVP (active development)
-- Repository state: Working backend + worker + UI in one Node.js app
-- Primary goal: Monitor tracked courses and notify users when open seats become available
+- Architecture: Node.js app with Express API/UI + worker + PostgreSQL
+- Primary goal: Monitor tracked courses and notify users when seats open (`os > 0`)
 
 ## 2) What is currently implemented
 
 1. Data model and persistence
 - PostgreSQL schema exists in `db/schema.sql`
 - Core tables: `users`, `courses`, `user_courses`, `shared_latest_jsp_file`, `shared_vsb_session`
-- DB access layer implemented in `src/db.js`
+- `user_courses.display_name` is supported for per-user course naming
+- DB layer exists in `src/db.js` with compatibility guard (`ensureCompatibility`)
 
 2. API server
-- Express API in `src/apiServer.js`
-- Endpoints implemented:
+- Express server in `src/apiServer.js`
+- Implemented endpoints:
   - `GET /api/health`
   - `POST /api/users/resolve`
-  - `GET /api/tracked-courses`
+  - `GET /api/tracked-courses?email=...`
   - `POST /api/tracked-courses`
-  - `DELETE /api/tracked-courses/:id`
-- `GET /` serves `index.html`
+  - `DELETE /api/tracked-courses/:id?email=...`
+- Serves `index.html` at `GET /`
 
 3. Frontend
 - Single-page UI in `index.html`
 - Supports:
-  - set notification email
-  - add tracked course by cart ID
-  - list tracked courses
-  - stop tracking course
-- Frontend is connected to `/api/*` (not local-only storage for courses)
+  - setting notification email
+  - adding tracked course by cart ID
+  - optional custom course name
+  - listing tracked courses from API
+  - stop tracking action
+- Email is persisted client-side in localStorage (`coursenotif_email`)
 
 4. Monitoring worker
 - Worker CLI in `src/worker.js`
 - Modes:
   - `--init-login`
   - `--once`
-  - default loop
+  - default loop mode
   - `--check-new-course <userId> <cartId>`
-- Core monitoring logic in `src/monitorService.js`
-- JSP parsing in `src/jspParser.js`
+- Monitor flow in `src/monitorService.js`
+- Parser in `src/jspParser.js`
 
-5. VSB source integration
-- Source mode selector in `src/config.js`
-- Supported modes:
-  - `browser` (Playwright automation + capture in `src/vsbBrowserSource.js`)
+5. VSB source integration and resilience
+- Source modes in `src/vsbSource.js`:
+  - `browser`
   - `filesystem`
   - `db`
-- Browser mode supports shared login session init and response capture
+- Browser mode (`src/vsbBrowserSource.js`) supports:
+  - shared login session init
+  - live `getClassData.jsp` capture
+  - tracked-course sync into VSB window
+  - presence cache to avoid repeated add loops
+  - refresh-window reuse of cached JSP payloads
+  - auto re-login attempts (including fallback flows)
+  - automatic browser-context reset/relaunch if Playwright context/page closes unexpectedly
+
+6. Ops scripts and local runners
+- `.env.local` loader: `scripts/with-env.sh`
+- Local npm runners:
+  - `npm run web:local`
+  - `npm run monitor:init-login:local`
+  - `npm run monitor:once:local`
+  - `npm run monitor:loop:local`
+- Supervisor scripts:
+  - `scripts/start-monitor-supervisor.sh`
+  - `scripts/stop-monitor-supervisor.sh`
+  - `scripts/monitor-supervisor.sh`
+- macOS launchd management:
+  - `scripts/install-monitor-launchd.sh`
+  - `scripts/uninstall-monitor-launchd.sh`
+
+7. Notifications
+- Notification module exists in `src/notification.js`
+- Delivery is still stubbed to console events (no real provider yet)
 
 ## 3) What is not done yet
 
-1. Notification delivery
-- Email sending is still stubbed in `src/notification.js` (console events only)
-- No real provider integration yet (Resend/SendGrid/etc.)
+1. Real notification delivery
+- No production email provider integration yet
+- No persisted delivery history/retry pipeline yet
 
 2. Security and auth
-- No full auth/account system yet
-- Current API ownership model is email-based and lightweight
+- No account auth/session model yet
+- Ownership model is still lightweight and email-based
 
-3. Testing and hardening
+3. Automated testing and CI quality gates
 - No dedicated unit/integration test suite yet
-- Current check is syntax smoke only: `npm run smoke`
+- Current built-in check is syntax smoke (`npm run smoke`)
 
-4. Operational maturity
-- No production-grade observability stack yet (structured logs/metrics/alerting)
-- No formal retry/backoff policy for notification delivery failures yet
+4. Production observability
+- No formal metrics, alerting, or full runbooks yet
 
 ## 4) Current runbook
 
@@ -77,34 +103,41 @@ Last updated: February 20, 2026
 - `npm install`
 - `npx playwright install chromium`
 
-2. Configure env vars (minimum)
-- `DATABASE_URL` is required
-- For browser mode: `VSB_SOURCE_MODE=browser`, `VSB_URL`, selectors as needed
+2. Configure environment
+- Required: `DATABASE_URL`
+- Browser mode minimum: `VSB_SOURCE_MODE=browser`, `VSB_URL`
+- For local env file workflow: create/update `.env.local`
 
 3. Apply schema
 - `psql "$DATABASE_URL" -f db/schema.sql`
 
-4. Start app
-- `npm run web`
+4. Start API/UI
+- `npm run web` (or `npm run web:local`)
 - Open `http://localhost:3000`
 
-5. Initialize shared browser session (browser mode)
-- `npm run monitor:init-login`
+5. Initialize browser session (browser mode)
+- `npm run monitor:init-login` (or `npm run monitor:init-login:local`)
 
 6. Run monitor
 - Single pass: `npm run monitor:once`
-- Continuous: `npm run monitor:loop`
+- Continuous loop: `npm run monitor:loop`
+- Local variants: `monitor:once:local`, `monitor:loop:local`
+
+7. Optional background operation
+- Manual supervisor: `bash scripts/start-monitor-supervisor.sh`
+- Stop supervisor: `bash scripts/stop-monitor-supervisor.sh`
+- macOS launchd install/uninstall scripts are available for persistent worker runtime
 
 ## 5) Immediate priorities
 
 1. Replace email stubs with real provider integration and delivery logging
-2. Add test coverage for parser, monitor logic, and API routes
-3. Improve auth/access control for tracked-course operations
-4. Harden session lifecycle behavior and failure recovery
-5. Add basic production observability and operational safeguards
+2. Add parser + monitor + API automated tests
+3. Introduce authentication and identity-bound ownership checks
+4. Add structured logs/metrics and operational alerts/runbooks
+5. Harden retry/backoff and idempotency for notifications
 
 ## 6) Notes for future contributors/agents
 
-- Treat this file as the source of truth for current implementation status.
-- `docs/ROADMAP.md` can still guide medium-term planning, but implementation has already started.
-- Keep docs aligned with code after each major change.
+- Keep this file aligned with actual code and scripts after each major change.
+- `README.md`, `context`, and `docs/ROADMAP.md` should be updated together when runtime behavior changes.
+- `docs/ROADMAP.md` is planning guidance; implementation truth is in `src/`, `db/`, and `scripts/`.
