@@ -56,11 +56,23 @@ CREATE TABLE IF NOT EXISTS shared_vsb_session (
   last_validated_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  CONSTRAINT shared_vsb_session_blob_required_when_connected CHECK (
-    (session_state = 'not_connected' AND encrypted_session_blob IS NULL) OR
-    (session_state <> 'not_connected' AND encrypted_session_blob IS NOT NULL)
+  CONSTRAINT shared_vsb_session_blob_required_when_ok CHECK (
+    (session_state = 'ok' AND encrypted_session_blob IS NOT NULL) OR
+    (session_state <> 'ok')
   )
 );
+
+-- Migration guard for older versions of this table:
+-- ensures rerunning schema updates old constraint behavior.
+ALTER TABLE shared_vsb_session
+  DROP CONSTRAINT IF EXISTS shared_vsb_session_blob_required_when_connected;
+ALTER TABLE shared_vsb_session
+  DROP CONSTRAINT IF EXISTS shared_vsb_session_blob_required_when_ok;
+ALTER TABLE shared_vsb_session
+  ADD CONSTRAINT shared_vsb_session_blob_required_when_ok CHECK (
+    (session_state = 'ok' AND encrypted_session_blob IS NOT NULL) OR
+    (session_state <> 'ok')
+  );
 
 CREATE INDEX IF NOT EXISTS idx_user_courses_user_id ON user_courses(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_courses_cart_id ON user_courses(cart_id);

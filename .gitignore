@@ -27,3 +27,10 @@ env/
 
 # Logs
 *.log
+
+# Node
+node_modules/
+npm-debug.log*
+.data/
+playwright-report/
+test-results/

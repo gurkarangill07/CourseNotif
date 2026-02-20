@@ -153,13 +153,52 @@
     </div>
 
     <script>
-        // Simple state management for the UI
         let trackedCourses = [];
         let notificationEmail = '';
 
-        function setEmail() {
+        function escapeHtml(text) {
+            const map = {
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#39;'
+            };
+            return String(text || '').replace(/[&<>"']/g, (m) => map[m]);
+        }
+
+        async function apiRequest(url, options = {}) {
+            const response = await fetch(url, {
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(options.headers || {})
+                },
+                ...options
+            });
+
+            const isJson = (response.headers.get('content-type') || '').includes('application/json');
+            const data = isJson ? await response.json() : null;
+            if (!response.ok) {
+                throw new Error((data && data.error) || `Request failed (${response.status})`);
+            }
+            return data;
+        }
+
+        async function loadTrackedCourses() {
+            if (!notificationEmail) {
+                trackedCourses = [];
+                renderList();
+                return;
+            }
+
+            const data = await apiRequest(`/api/tracked-courses?email=${encodeURIComponent(notificationEmail)}`);
+            trackedCourses = data.items || [];
+            renderList();
+        }
+
+        async function setEmail() {
             const emailInput = document.getElementById('email');
-            const email = emailInput.value.trim();
+            const email = emailInput.value.trim().toLowerCase();
 
             if (!email || !email.includes('@') || !email.includes('.')) {
                 alert("Please enter a valid email address.");
@@ -167,15 +206,24 @@
                 return;
             }
 
-            notificationEmail = email;
-            alert(`Notification email has been set to: ${notificationEmail}`);
+            try {
+                await apiRequest('/api/users/resolve', {
+                    method: 'POST',
+                    body: JSON.stringify({ email })
+                });
+                notificationEmail = email;
+                localStorage.setItem('coursenotif_email', email);
+                await loadTrackedCourses();
+                alert(`Notification email has been set to: ${notificationEmail}`);
+            } catch (error) {
+                alert(error.message);
+            }
         }
 
-        function startTracking() {
+        async function startTracking() {
             const courseInput = document.getElementById('courseCode');
             const code = courseInput.value.trim().toUpperCase();
 
-            // Basic Validation
             if (!notificationEmail) {
                 alert("Please set your email address first using the button above.");
                 document.getElementById('email').focus();
@@ -187,27 +235,34 @@
                 return;
             }
 
-            // Prevent duplicates
-            if (trackedCourses.some(c => c.code === code)) {
-                alert("You are already tracking this course.");
+            try {
+                const result = await apiRequest('/api/tracked-courses', {
+                    method: 'POST',
+                    body: JSON.stringify({ email: notificationEmail, cartId: code })
+                });
+                if (!result.created) {
+                    alert("You are already tracking this course.");
+                }
+                courseInput.value = '';
+                await loadTrackedCourses();
+            } catch (error) {
+                alert(error.message);
+            }
+        }
+
+        async function stopTracking(id) {
+            if (!notificationEmail) {
                 return;
             }
 
-            // Add to list
-            trackedCourses.push({
-                id: Date.now(),
-                code: code
-            });
-
-            // Clear course input but keep email
-            courseInput.value = '';
-            renderList();
-        }
-
-        function stopTracking(id) {
-            // Remove from list
-            trackedCourses = trackedCourses.filter(c => c.id !== id);
-            renderList();
+            try {
+                await apiRequest(`/api/tracked-courses/${id}?email=${encodeURIComponent(notificationEmail)}`, {
+                    method: 'DELETE'
+                });
+                await loadTrackedCourses();
+            } catch (error) {
+                alert(error.message);
+            }
         }
 
         function renderList() {
@@ -224,7 +279,8 @@
                 li.className = 'course-item';
                 li.innerHTML = `
                     <div class="course-info">
-                        <strong>${course.code}</strong>
+                        <strong>${escapeHtml(course.cartId)}</strong>
+                        <span>${escapeHtml(course.courseName)} · OS: ${escapeHtml(course.os)}</span>
                     </div>
                     <button class="stop-btn" onclick="stopTracking(${course.id})">Stop Tracking</button>
                 `;
@@ -232,8 +288,22 @@
             });
         }
 
-        // Render initial list
-        renderList();
+        async function initializePage() {
+            const savedEmail = localStorage.getItem('coursenotif_email');
+            if (savedEmail) {
+                notificationEmail = savedEmail;
+                document.getElementById('email').value = savedEmail;
+                try {
+                    await loadTrackedCourses();
+                } catch (error) {
+                    console.error(error);
+                }
+            } else {
+                renderList();
+            }
+        }
+
+        initializePage();
     </script>
 </body>
 </html>
