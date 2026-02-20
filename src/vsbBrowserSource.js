@@ -129,40 +129,75 @@ function createVsbBrowserSource(db, config) {
     }
   }
 
-  async function ensureBrowser() {
+  function isBrowserClosedError(error) {
+    const message = String((error && error.message) || "").toLowerCase();
+    return (
+      message.includes("target page, context or browser has been closed") ||
+      message.includes("browsercontext.newpage") ||
+      message.includes("browsercontext.pages") ||
+      message.includes("browser has been closed") ||
+      message.includes("browser has disconnected") ||
+      message.includes("context closed")
+    );
+  }
+
+  async function resetBrowserState() {
+    if (context) {
+      try {
+        await context.close();
+      } catch (_) {
+        // Context may already be closed.
+      }
+    }
+    context = null;
+    page = null;
+    hasSyncedTrackedCoursesForContext = false;
+    clearCoursePresenceCache();
+  }
+
+  async function ensureBrowser({ allowRecover = true } = {}) {
     if (!config.vsbUrl) {
       throw new Error("VSB_URL is required for browser automation mode.");
     }
 
-    if (!context) {
-      const { chromium } = requirePlaywright();
-      const userDataDir = path.resolve(config.vsbUserDataDir);
-      context = await chromium.launchPersistentContext(userDataDir, {
-        headless: config.vsbHeadless
-      });
-      hasSyncedTrackedCoursesForContext = false;
-      clearCoursePresenceCache();
-    }
+    try {
+      if (!context) {
+        const { chromium } = requirePlaywright();
+        const userDataDir = path.resolve(config.vsbUserDataDir);
+        context = await chromium.launchPersistentContext(userDataDir, {
+          headless: config.vsbHeadless
+        });
+        hasSyncedTrackedCoursesForContext = false;
+        clearCoursePresenceCache();
+      }
 
-    const pages = context.pages().filter((p) => !p.isClosed());
-    const vsbHost = getVsbHost();
-    const preferredPage =
-      pages.find((p) => {
-        const url = p.url();
-        if (!url || !vsbHost) {
-          return false;
-        }
-        return url.includes(vsbHost);
-      }) || pages[0] || null;
+      const pages = context.pages().filter((p) => !p.isClosed());
+      const vsbHost = getVsbHost();
+      const preferredPage =
+        pages.find((p) => {
+          const url = p.url();
+          if (!url || !vsbHost) {
+            return false;
+          }
+          return url.includes(vsbHost);
+        }) || pages[0] || null;
 
-    if (preferredPage) {
-      page = preferredPage;
-    } else {
-      page = await context.newPage();
-    }
+      if (preferredPage) {
+        page = preferredPage;
+      } else {
+        page = await context.newPage();
+      }
 
-    if (!page.url() || page.url() === "about:blank") {
-      await page.goto(config.vsbUrl, { waitUntil: "domcontentloaded" });
+      if (!page.url() || page.url() === "about:blank") {
+        await page.goto(config.vsbUrl, { waitUntil: "domcontentloaded" });
+      }
+    } catch (error) {
+      if (allowRecover && isBrowserClosedError(error)) {
+        console.log("[vsb] Browser context/page closed unexpectedly; relaunching browser context.");
+        await resetBrowserState();
+        return ensureBrowser({ allowRecover: false });
+      }
+      throw error;
     }
   }
 
@@ -1082,14 +1117,7 @@ function createVsbBrowserSource(db, config) {
   }
 
   async function close() {
-    if (!context) {
-      return;
-    }
-    await context.close();
-    context = null;
-    page = null;
-    hasSyncedTrackedCoursesForContext = false;
-    clearCoursePresenceCache();
+    await resetBrowserState();
   }
 
   async function tryAutoRelogin({ reason } = {}) {
