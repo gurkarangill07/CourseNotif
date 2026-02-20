@@ -50,6 +50,66 @@ function createVsbBrowserSource(db, config) {
   let context = null;
   let page = null;
   let hasSyncedTrackedCoursesForContext = false;
+  const coursePresenceCache = new Map();
+  const coursePresenceCacheTtlMs = 45 * 60 * 1000;
+
+  function normalizeCartId(value) {
+    return String(value || "").trim().toUpperCase();
+  }
+
+  function setCoursePresenceCache(cartId, isPresent, source = "unknown") {
+    const key = normalizeCartId(cartId);
+    if (!key) {
+      return;
+    }
+    coursePresenceCache.set(key, {
+      isPresent: Boolean(isPresent),
+      updatedAt: Date.now(),
+      source
+    });
+  }
+
+  function getCoursePresenceCache(cartId) {
+    const key = normalizeCartId(cartId);
+    if (!key) {
+      return null;
+    }
+    const cached = coursePresenceCache.get(key);
+    if (!cached) {
+      return null;
+    }
+    if (Date.now() - cached.updatedAt > coursePresenceCacheTtlMs) {
+      coursePresenceCache.delete(key);
+      return null;
+    }
+    return cached;
+  }
+
+  function clearCoursePresenceCache() {
+    coursePresenceCache.clear();
+  }
+
+  function hasCartIdToken(jspBody, cartId) {
+    const token = normalizeCartId(cartId);
+    if (!token) {
+      return false;
+    }
+    const raw = String(jspBody || "").toUpperCase();
+    const tokenRegex = new RegExp(
+      `(^|[^A-Z0-9])${escapeRegExp(token)}([^A-Z0-9]|$)`,
+      "i"
+    );
+    return tokenRegex.test(raw);
+  }
+
+  function recordPresenceFromCandidate(cartId, candidate) {
+    const token = normalizeCartId(cartId);
+    if (!token || !candidate) {
+      return;
+    }
+    const present = hasCartIdToken(candidate.jspBody, token);
+    setCoursePresenceCache(token, present, present ? "jsp_capture_present" : "jsp_capture_absent");
+  }
 
   function getVsbHost() {
     try {
@@ -81,6 +141,7 @@ function createVsbBrowserSource(db, config) {
         headless: config.vsbHeadless
       });
       hasSyncedTrackedCoursesForContext = false;
+      clearCoursePresenceCache();
     }
 
     const pages = context.pages().filter((p) => !p.isClosed());
@@ -132,6 +193,11 @@ function createVsbBrowserSource(db, config) {
       .locator(config.vsbSearchSelector)
       .first()
       .waitFor({ state: "visible", timeout: config.vsbSearchTimeoutMs });
+
+    // Guard against overly broad search selectors that can match login forms.
+    if (await isLoggedOutScreenVisible()) {
+      throw new Error("login_ui_visible");
+    }
   }
 
   async function tryFallbackLoginInFrame(frame) {
@@ -290,6 +356,24 @@ function createVsbBrowserSource(db, config) {
 
       const fallback = await attemptFallbackLoginAcrossFrames();
       if (!fallback.ok) {
+        const handoffClicked = await tryPassportContinueHandoff();
+        if (handoffClicked) {
+          try {
+            await waitForSearchField();
+            await db.markSharedSessionOk({
+              sessionDurationMinutes: config.sessionDurationMinutes
+            });
+            hasSyncedTrackedCoursesForContext = false;
+            clearCoursePresenceCache();
+            console.log("[vsb] Auto re-login succeeded via continue handoff without login form.");
+            return {
+              ok: true,
+              reason: "continue_handoff_only"
+            };
+          } catch (_) {
+            // Keep original failure if handoff did not reach VSB search UI.
+          }
+        }
         return {
           ok: false,
           reason: fallback.reason || "login fields not found"
@@ -322,6 +406,7 @@ function createVsbBrowserSource(db, config) {
         sessionDurationMinutes: config.sessionDurationMinutes
       });
       hasSyncedTrackedCoursesForContext = false;
+      clearCoursePresenceCache();
       console.log("[vsb] Auto re-login succeeded via fallback login flow.");
       return {
         ok: true,
@@ -371,6 +456,7 @@ function createVsbBrowserSource(db, config) {
     });
 
     hasSyncedTrackedCoursesForContext = false;
+    clearCoursePresenceCache();
 
     console.log("[vsb] Auto re-login succeeded.");
     return {
@@ -725,14 +811,29 @@ function createVsbBrowserSource(db, config) {
     await page.reload({ waitUntil: "load" });
   }
 
+  async function refreshOnlyForCapture(cartId) {
+    const cartIdText = String(cartId || "").trim();
+    if (cartIdText) {
+      console.log(`[vsb] ${cartIdText} already present; refreshing page for JSP capture...`);
+    } else {
+      console.log("[vsb] Refreshing page for JSP capture...");
+    }
+    await page.reload({ waitUntil: "load" });
+  }
+
   async function isCoursePresentInWindow(cartId) {
     const cartIdText = String(cartId).trim();
     if (!cartIdText) {
       return false;
     }
 
+    const cached = getCoursePresenceCache(cartIdText);
+    if (cached && cached.isPresent) {
+      return true;
+    }
+
     try {
-      return await page.evaluate(
+      const presentByDom = await page.evaluate(
         ({ targetCartId, presenceSelector, tokenPattern }) => {
           const cartIdNorm = String(targetCartId || "")
             .trim()
@@ -780,6 +881,10 @@ function createVsbBrowserSource(db, config) {
           tokenPattern: `(^|[^A-Z0-9])${escapeRegExp(cartIdText.toUpperCase())}([^A-Z0-9]|$)`
         }
       );
+      if (presentByDom) {
+        setCoursePresenceCache(cartIdText, true, "dom_visible_match");
+      }
+      return presentByDom;
     } catch (_) {
       return false;
     }
@@ -816,6 +921,7 @@ function createVsbBrowserSource(db, config) {
       try {
         const exists = await isCoursePresentInWindow(cartId);
         if (exists) {
+          setCoursePresenceCache(cartId, true, "sync_precheck_present");
           continue;
         }
         console.log(`[vsb] ${cartId} missing in VSB page; adding...`);
@@ -824,10 +930,14 @@ function createVsbBrowserSource(db, config) {
 
         const existsAfterAdd = await isCoursePresentInWindow(cartId);
         if (!existsAfterAdd) {
+          setCoursePresenceCache(cartId, false, "sync_post_add_absent");
           allSynced = false;
           console.log(`[vsb] ${cartId} still not visible after add attempt; will retry later.`);
+        } else {
+          setCoursePresenceCache(cartId, true, "sync_post_add_present");
         }
       } catch (error) {
+        setCoursePresenceCache(cartId, false, "sync_error");
         allSynced = false;
         console.log(`[vsb] Warning: failed to sync tracked course ${cartId}: ${error.message}`);
       }
@@ -852,6 +962,9 @@ function createVsbBrowserSource(db, config) {
       await ensureBrowser();
       if (!hasSyncedTrackedCoursesForContext) {
         await ensureSessionReady();
+      }
+      if (latestStoredCandidate && cartId) {
+        recordPresenceFromCandidate(cartId, latestStoredCandidate);
       }
       return [latestStoredCandidate];
     }
@@ -884,16 +997,43 @@ function createVsbBrowserSource(db, config) {
       console.log("[vsb] Warning: Could not select Fall/Winter term:", e.message);
     }
 
-    const candidates = await withGetClassCapture(async () => {
-      await searchSelectAndRefresh(cartId);
+    const cartIdText = String(cartId || "").trim();
+    let attemptedRefreshOnly = false;
+    let candidates = await withGetClassCapture(async () => {
+      const isPresent = cartIdText ? await isCoursePresentInWindow(cartIdText) : false;
+      if (isPresent) {
+        attemptedRefreshOnly = true;
+        await refreshOnlyForCapture(cartIdText);
+        return;
+      }
+      await searchSelectAndRefresh(cartIdText);
     });
+
+    if (attemptedRefreshOnly && cartIdText && candidates.length === 0) {
+      console.log(
+        `[vsb] No JSP captured on refresh-only for ${cartIdText}; trying targeted search capture.`
+      );
+      candidates = await withGetClassCapture(async () => {
+        await searchSelectAndRefresh(cartIdText);
+      });
+    }
 
     if (candidates.length === 0) {
       if (latestStoredCandidate && hasFreshStoredFile) {
         console.log("[vsb] No fresh JSP captured; reusing fresh cached JSP.");
+        if (cartId) {
+          recordPresenceFromCandidate(cartId, latestStoredCandidate);
+        }
         return [latestStoredCandidate];
       }
       throw new Error("No getClassData.jsp response captured from VSB network and no fresh cached JSP is available.");
+    }
+
+    if (cartId) {
+      const latestCandidate = pickLatestJspFile(candidates);
+      if (latestCandidate) {
+        recordPresenceFromCandidate(cartId, latestCandidate);
+      }
     }
 
     await db.markSharedSessionOk({
@@ -906,6 +1046,7 @@ function createVsbBrowserSource(db, config) {
   async function initLoginSession() {
     await ensureBrowser();
     hasSyncedTrackedCoursesForContext = false;
+    clearCoursePresenceCache();
     await page.goto(config.vsbUrl, { waitUntil: "domcontentloaded" });
 
     const autoResult = await attemptAutoRelogin("init_login_session");
@@ -948,6 +1089,7 @@ function createVsbBrowserSource(db, config) {
     context = null;
     page = null;
     hasSyncedTrackedCoursesForContext = false;
+    clearCoursePresenceCache();
   }
 
   async function tryAutoRelogin({ reason } = {}) {
