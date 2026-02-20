@@ -91,12 +91,25 @@ async function main() {
       }
 
       const user = await db.getOrCreateUserByEmail(email);
+      const existing = await db.getTrackedCourseByUserAndCart(user.id, cartId);
+      if (existing) {
+        return res.status(200).json({
+          created: false,
+          item: {
+            id: existing.user_course_id,
+            cartId: existing.cart_id,
+            courseName: existing.course_name || existing.cart_id,
+            os: Number.isFinite(Number(existing.os)) ? Number(existing.os) : 0
+          }
+        });
+      }
+
       await db.ensureCourseExists(cartId);
-      const inserted = await db.trackCourseForUser({ userId: user.id, cartId });
+      await db.trackCourseForUser({ userId: user.id, cartId });
       const tracked = await db.getTrackedCourseByUserAndCart(user.id, cartId);
 
-      return res.status(inserted ? 201 : 200).json({
-        created: Boolean(inserted),
+      return res.status(201).json({
+        created: true,
         item: {
           id: tracked.user_course_id,
           cartId: tracked.cart_id,
